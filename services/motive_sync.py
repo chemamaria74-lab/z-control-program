@@ -221,6 +221,15 @@ def normalize_inspection(item: Any, *, integration_id: int, tenant_id: str) -> t
             if not isinstance(defect, dict):
                 continue
             fingerprint = "|".join(str(v or "") for v in (part.get("id"), part_index, defect_index, defect.get("title"), defect.get("severity")))
+            status = str(defect.get("status") or part.get("status") or report.get("status") or "")
+            mechanic = part.get("mechanic_details") if isinstance(part.get("mechanic_details"), dict) else {}
+            resolved_at = _iso(
+                defect.get("resolved_at") or defect.get("repaired_at")
+                or mechanic.get("mechanic_signed_at") or part.get("resolved_at")
+                or part.get("repaired_at")
+            )
+            if not resolved_at and status.strip().casefold() in {"repaired", "resolved", "corrected", "no_repair_needed"}:
+                resolved_at = _iso(report.get("mechanic_signed_at") or report.get("reviewer_signed_at"))
             defects.append({
                 "integration_id": integration_id,
                 "tenant_id": tenant_id,
@@ -228,8 +237,9 @@ def normalize_inspection(item: Any, *, integration_id: int, tenant_id: str) -> t
                 "category": str(part.get("category") or ""),
                 "title": str(defect.get("title") or part.get("category") or ""),
                 "severity": str(defect.get("severity") or part.get("type") or ""),
-                "status": str(part.get("status") or report.get("status") or ""),
+                "status": status,
                 "notes": str(part.get("notes") or ""),
+                "resolved_at": resolved_at,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             })
     return inspection, defects
@@ -487,6 +497,18 @@ def _event_lookback_dates(full: bool) -> tuple[str, str]:
         days = min(max(int(os.getenv("MOTIVE_EVENT_LOOKBACK_DAYS", 30)), 1), 730)
     except ValueError:
         days = 30
+    today = date.today()
+    return (today - timedelta(days=days)).isoformat(), today.isoformat()
+
+
+def _inspection_lookback_dates(full: bool) -> tuple[str, str]:
+    """Reconsulta reparaciones antiguas, porque Motive puede resolverlas semanas después."""
+    if full:
+        return _lookback_dates(True)
+    try:
+        days = min(max(int(os.getenv("MOTIVE_INSPECTION_LOOKBACK_DAYS", 365)), 30), 730)
+    except ValueError:
+        days = 365
     today = date.today()
     return (today - timedelta(days=days)).isoformat(), today.isoformat()
 
@@ -791,9 +813,10 @@ def sync_motive_safety(tenant_id: str, *, queued_run_id: int) -> dict[str, Any]:
                 "datasets": datasets,
             }).eq("id", run_id).execute()
 
+        inspection_start_date, inspection_end_date = _inspection_lookback_dates(False)
         inspection_items = _optional_pages(
             datasets, "inspections", "/v2/inspection_reports", "inspection_reports",
-            params={"start_date": event_start_date, "end_date": event_end_date},
+            params={"start_date": inspection_start_date, "end_date": inspection_end_date},
             progress=inspection_progress,
         )
         normalized_inspections = [
@@ -1024,9 +1047,10 @@ def sync_motive_tenant(
         pulse()
 
         phase("Inspecciones y defectos")
+        inspection_start_date, inspection_end_date = _inspection_lookback_dates(full)
         inspection_items = motive_get_all_pages(
             "/v2/inspection_reports", collection_key="inspection_reports",
-            params={"start_date": start_date, "end_date": end_date},
+            params={"start_date": inspection_start_date, "end_date": inspection_end_date},
             progress=page_progress("Inspecciones y defectos"),
         )
         normalized = [normalize_inspection(item, integration_id=integration_id, tenant_id=tenant_id) for item in inspection_items]

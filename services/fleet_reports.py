@@ -9,9 +9,13 @@ from datetime import date, datetime, time, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from openpyxl import load_workbook
 import xlsxwriter
+
+
+FLEET_REPORT_TIMEZONE = ZoneInfo("America/Mexico_City")
 
 
 def _text(value: Any) -> str:
@@ -831,7 +835,7 @@ def build_fleet_report(data: dict[str, list[dict[str, Any]]], start: date, end: 
         summary.autofilter(1, 0, last_row, len(unit_headers) - 1)
         summary.conditional_format(2, 5, last_row, 5, {"type": "data_bar", "bar_color": "#8B1E34"})
 
-    _sheet_if_rows(workbook, "Gastos", data.get("expenses", []), [
+    _sheet_if_rows(workbook, "Gastos de oficina", data.get("expenses", []), [
         ("Fecha", "occurred_at"), ("Grupo", "group_name"), ("Zona", "zone_name"), ("Unidad", "vehicle_number"),
         ("Tipo", "expense_type"), ("Categoría", "category"), ("Descripción", "description"), ("Litros", "quantity_liters"),
         ("Importe MXN", "amount_mxn"), ("Origen", "source"), ("Registró", "submitted_by")], header, cell, date_fmt, money)
@@ -895,7 +899,10 @@ def _sheet(workbook: xlsxwriter.Workbook, name: str, rows: list[dict[str, Any]],
             value = row.get(key)
             if key in {"date", "occurred_at", "started_at", "ended_at", "inspected_at", "resolved_at", "purchased_at"} and value:
                 try:
-                    sheet.write_datetime(row_index, column, datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None), date_fmt)
+                    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                    if parsed.tzinfo is not None:
+                        parsed = parsed.astimezone(FLEET_REPORT_TIMEZONE)
+                    sheet.write_datetime(row_index, column, parsed.replace(tzinfo=None), date_fmt)
                     continue
                 except ValueError:
                     pass
