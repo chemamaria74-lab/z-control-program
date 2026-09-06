@@ -24,6 +24,24 @@ def test_empty_report_has_executive_sheets_without_misleading_empty_tabs(tmp_pat
     assert workbook.sheetnames == ["Dashboard", "Resumen por chofer", "Unidades y diagnóstico"]
 
 
+def test_office_expenses_sheet_has_an_explicit_name(tmp_path):
+    payload = build_fleet_report({
+        "expenses": [{
+            "occurred_at": "2026-07-31", "zone_name": "Viaecos",
+            "expense_type": "gasto_directo", "category": "Refacciones",
+            "amount_mxn": 1200, "source": "ge_control_direct",
+            "submitted_by": "Gastos y pagos",
+        }],
+        "driver_events": [], "speeding": [], "activity": [], "faults": [],
+    }, date(2026, 7, 1), date(2026, 7, 31))
+    target = tmp_path / "office-expenses.xlsx"
+    target.write_bytes(payload)
+    workbook = load_workbook(target, read_only=True, data_only=True)
+    assert "Gastos de oficina" in workbook.sheetnames
+    assert "Gastos" not in workbook.sheetnames
+    assert workbook["Gastos de oficina"]["C2"].value == "Viaecos"
+
+
 def test_report_adds_visual_manager_dashboard_and_driver_summary(tmp_path):
     payload = build_fleet_report({
         "vehicles": [
@@ -84,6 +102,20 @@ def test_report_adds_executive_chronology_when_events_exist(tmp_path):
     assert "Eventos de chofer" in workbook.sheetnames
     sheet = workbook["Eventos de chofer"]
     assert sheet["E2"].value == "Frenado brusco"
+
+
+def test_report_converts_utc_timestamps_to_mexico_local_time(tmp_path):
+    payload = build_fleet_report({
+        "inspections": [{
+            "inspected_at": "2026-08-01T00:12:53+00:00", "driver_name": "Ana",
+            "vehicle_number": "U-1", "inspection_type": "post_trip", "status": "resolved",
+        }],
+        "driver_events": [], "speeding": [], "faults": [], "expenses": [], "activity": [],
+    }, date(2026, 7, 31), date(2026, 8, 1))
+    target = tmp_path / "local-time-report.xlsx"
+    target.write_bytes(payload)
+    workbook = load_workbook(target, data_only=True)
+    assert workbook["Inspecciones"]["A2"].value.isoformat() == "2026-07-31T18:12:53"
 
 
 def test_analytics_uses_consumed_fuel_and_exact_utilization_rollup():

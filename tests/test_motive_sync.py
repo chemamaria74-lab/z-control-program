@@ -5,7 +5,7 @@ from pathlib import Path
 from services.motive_sync import (
     GALLONS_TO_LITERS, normalize_driver_event, normalize_fault, normalize_fuel_purchase,
     normalize_inspection, normalize_speeding_event, normalize_vehicle,
-    normalize_vehicle_mileage, normalize_vehicle_utilization, _event_lookback_dates, _lookback_dates,
+    normalize_vehicle_mileage, normalize_vehicle_utilization, _event_lookback_dates, _inspection_lookback_dates, _lookback_dates,
     _daily_metrics, _merge_motive_events, _official_requester_uuid, normalize_currency,
 )
 from services.motive import motive_get_all_pages_flexible
@@ -27,6 +27,12 @@ def test_incremental_operational_window_covers_manager_report(monkeypatch):
     monkeypatch.delenv("MOTIVE_INCREMENTAL_LOOKBACK_DAYS", raising=False)
     start, end = _lookback_dates(False)
     assert (date.fromisoformat(end) - date.fromisoformat(start)).days == 30
+
+
+def test_incremental_inspection_window_rechecks_late_repairs(monkeypatch):
+    monkeypatch.delenv("MOTIVE_INSPECTION_LOOKBACK_DAYS", raising=False)
+    start, end = _inspection_lookback_dates(False)
+    assert (date.fromisoformat(end) - date.fromisoformat(start)).days == 365
 
 
 def test_daily_metrics_seed_confirmed_zero_days_after_complete_trip_sync():
@@ -103,6 +109,21 @@ def test_inspection_normalizer_extracts_driver_and_nested_defects():
     assert len(defects) == 1
     assert defects[0]["title"] == "Presión baja"
     assert defects[0]["severity"] == "major"
+
+
+def test_inspection_normalizer_records_repaired_part_resolution():
+    inspection, defects = normalize_inspection({"inspection_report": {
+        "id": 4, "time": "2026-07-31T18:12:00Z", "status": "resolved",
+        "reviewer_signed_at": "2026-08-04T22:18:00Z", "vehicle": {"id": 8},
+        "inspected_parts": [{
+            "id": 2, "category": "Llantas", "status": "repaired",
+            "mechanic_details": {"mechanic_signed_at": "2026-08-04T22:18:00Z"},
+            "defects": [{"title": "Profundidad baja", "severity": "minor"}],
+        }],
+    }}, integration_id=1, tenant_id="tenant")
+    assert inspection["status"] == "resolved"
+    assert defects[0]["status"] == "repaired"
+    assert defects[0]["resolved_at"] == "2026-08-04T22:18:00+00:00"
 
 
 def test_driver_event_keeps_behaviors_but_not_camera_urls():
